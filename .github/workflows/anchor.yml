@@ -1,0 +1,78 @@
+name: anchor
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # daily, off the hour to avoid the cron stampede
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CHAIN_HEADS_URL: https://web-production-8fffa.up.railway.app/api/chain-heads
+
+jobs:
+  anchor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch current chain heads
+        id: fetch
+        run: |
+          set -euo pipefail
+          curl -sSf --max-time 30 "$CHAIN_HEADS_URL" -o /tmp/heads.json
+          jq -e '.chains.approvals.head and .chains.audit_events.head' /tmp/heads.json >/dev/null
+          # Normalize to the anchor file shape (heads + rows only — the
+          # comparison must not churn on generated_at).
+          jq '{chains: {approvals: {rows: .chains.approvals.rows, head: .chains.approvals.head},
+                        audit_events: {rows: .chains.audit_events.rows, head: .chains.audit_events.head}}}' \
+            /tmp/heads.json > /tmp/normalized.json
+          if [ -f latest.json ] && jq -e --slurpfile new /tmp/normalized.json \
+               '{chains: {approvals: {rows: .chains.approvals.rows, head: .chains.approvals.head},
+                          audit_events: {rows: .chains.audit_events.rows, head: .chains.audit_events.head}}} == $new[0]' \
+               latest.json >/dev/null; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write new anchor
+        if: steps.fetch.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+          n=$(ls anchors/*.json 2>/dev/null | wc -l)
+          jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" --argjson n "$n" \
+             '{anchor: $n, taken_at: $ts,
+               method: "scheduled: GET /api/chain-heads (see workflow run log)",
+               service: "baseplate-control (Baseplate Cloud), production",
+               chains: .chains}' /tmp/normalized.json > "anchors/${ts}.json"
+          cp "anchors/${ts}.json" latest.json
+          echo "ANCHOR_FILE=anchors/${ts}.json" >> "$GITHUB_ENV"
+
+      - name: OpenTimestamps stamp
+        if: steps.fetch.outputs.changed == 'true'
+        run: |
+          pipx install opentimestamps-client
+          ots stamp "$ANCHOR_FILE"
+
+      - name: Stamp any unstamped anchors + upgrade pending stamps
+        run: |
+          pipx install opentimestamps-client 2>/dev/null || true
+          for f in anchors/*.json; do
+            [ -e "$f.ots" ] || ots stamp "$f" || true
+          done
+          for f in anchors/*.ots; do
+            [ -e "$f" ] || continue
+            ots upgrade "$f" || true
+          done
+
+      - name: Commit
+        run: |
+          git config user.name "anchor-bot"
+          git config user.email "anchors@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "nothing to commit"; exit 0; }
+          git commit -m "anchor: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push

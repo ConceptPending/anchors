@@ -1,0 +1,17 @@
+{
+  "anchor": 0,
+  "taken_at": "2026-07-09T20:36:11+00:00",
+  "method": "manual: railway ssh -- python scripts/verify_chain.py --anchor (both chains INTACT)",
+  "service": "baseplate-control (Baseplate Cloud), production",
+  "chains": {
+    "approvals": {
+      "rows": 1,
+      "head": "02303652a77b341ba9fdc0bf0f171a43df8605bc87c172be05f8386d7c920b8e"
+    },
+    "audit_events": {
+      "rows": 8,
+      "head": "151bba41058f49553fd2cbf31454a8a358ab427af6948634aa9f8dc0f1ffe8c1"
+    }
+  },
+  "note": "First anchor, taken immediately after the hash-chain migration (baseplate-control PR #2, deploy a1d1dd8f) backfilled the 2026-07-09 onboarding records."
+}
